@@ -12,8 +12,18 @@ import 'package:simple_live_app/app/log.dart';
 import 'package:path/path.dart' as p;
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/services/local_storage_service.dart';
+import 'package:simple_live_app/services/config_backup_service.dart';
+import 'package:simple_live_app/services/db_service.dart';
+import 'package:simple_live_app/services/douyu_account_service.dart';
+import 'package:simple_live_app/services/follow_service.dart';
 
 class OtherSettingsController extends BaseController {
+  ConfigBackupService get _backup => ConfigBackupService(
+        LocalStorageService.instance,
+        DBService.instance,
+        DouyuAccountService.instance,
+      );
+
   RxList<LogFileModel> logFiles = <LogFileModel>[].obs;
 
   var videoOutputDrivers = {
@@ -156,14 +166,7 @@ class OtherSettingsController extends BaseController {
   void exportConfig() async {
     try {
       // 组装数据
-      var data = {
-        "type": "simple_live",
-        "platform": Platform.operatingSystem,
-        "version": 1,
-        "time": DateTime.now().millisecondsSinceEpoch,
-        "config": LocalStorageService.instance.settingsBox.toMap(),
-        "shield": LocalStorageService.instance.shieldBox.toMap(),
-      };
+      var data = _backup.exportData();
 
       var bytes = Uint8List.fromList(utf8.encode(jsonEncode(data)));
 
@@ -204,25 +207,20 @@ class OtherSettingsController extends BaseController {
         return;
       }
       var filePath = file.files.single.path!;
-      var data = jsonDecode(await File(filePath).readAsString());
-      if (data["type"] != "simple_live") {
-        SmartDialog.showToast("不支持的配置文件");
-        return;
-      }
+      final data =
+          ConfigBackup.parse(jsonDecode(await File(filePath).readAsString()));
       // 检查platform
-      if (data["platform"] != Platform.operatingSystem &&
+      if (data.platform != Platform.operatingSystem &&
           !await Utils.showAlertDialog("导入配置文件平台不匹配,是否继续导入?", title: "平台不匹配")) {
         return;
       }
-      LocalStorageService.instance.settingsBox.clear();
-      LocalStorageService.instance.shieldBox.clear();
-      LocalStorageService.instance.settingsBox.putAll(data["config"]);
-      LocalStorageService.instance.shieldBox
-          .putAll(data["shield"].cast<String, String>());
+      await _backup.importData(data);
+      await FollowService.instance.loadData(updateStatus: false);
       SmartDialog.showToast("导入成功,重启生效");
     } catch (e) {
-      Log.logPrint(e);
-      SmartDialog.showToast("导入失败:$e");
+      // JSON decoding errors can contain excerpts of account credentials.
+      Log.logPrint('Configuration import failed (${e.runtimeType})');
+      SmartDialog.showToast("导入失败，请检查配置文件格式或稍后重试");
     }
   }
 
